@@ -176,6 +176,60 @@ Data is returned via `onComplete` or `onChunk` or `onPage` callbacks passed as a
 
 The reason for this design is that parquet is a column-oriented format, and returning data in row-oriented format requires transposing the column data. This is an expensive operation in javascript. If you don't pass in an `onComplete` argument to `parquetRead`, hyparquet will skip this transpose step and save memory.
 
+### Extracting Categorical Column Categories
+
+For categorical columns that use dictionary encoding, you can extract the unique categories (dictionary values) without reading the entire dataset:
+
+```javascript
+import { parquetReadDictionary } from 'hyparquet'
+
+// Extract categories from a categorical column
+const dictionary = await parquetReadDictionary({
+  file,
+  columns: ['category_column'] // specify single column name
+})
+
+if (dictionary) {
+  console.log('Categories:', Array.from(dictionary))
+} else {
+  console.log('Column is not categorical')
+}
+```
+
+### Reading Raw Dictionary Indices
+
+For categorical columns, you can also read the raw dictionary indices instead of the decoded string values by setting the `rawDictionary` option to `true`:
+
+```javascript
+import { parquetReadColumn, parquetReadDictionary } from 'hyparquet'
+
+// Get the dictionary mapping
+const dictionary = await parquetReadDictionary({
+  file,
+  columns: ['category_column']
+})
+
+// Read raw dictionary indices (numbers) instead of decoded values (strings)
+const indices = await parquetReadColumn({
+  file,
+  columns: ['category_column'],
+  rawDictionary: true // returns indices instead of decoded values
+})
+
+// You can manually decode the values if needed:
+const decodedValues = indices.map(index => dictionary[index])
+```
+
+This is useful for:
+- Getting unique values from categorical columns
+- Building filter UIs with available categories
+- Data exploration and profiling
+- Memory-efficient category extraction
+- Working with numerical representations of categorical data
+- Machine learning workflows that require categorical data as integers
+
+The function returns `undefined` if the specified column doesn't use dictionary encoding.
+
 ### Chunk Streaming
 
 The `onChunk` callback returns column-oriented data as it is ready. `onChunk` will always return top-level columns, including structs, assembled as a single column. This may require waiting for multiple sub-columns to all load before assembly can occur.

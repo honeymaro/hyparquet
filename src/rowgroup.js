@@ -17,7 +17,7 @@ import { flatten } from './utils.js'
  * @returns {AsyncRowGroup} resolves to column data
  */
 export function readRowGroup(options, { metadata, columns }, groupPlan) {
-  const { file, compressors, utf8 } = options
+  const { file, compressors, utf8, rawDictionary } = options
 
   /** @type {AsyncColumn[]} */
   const asyncColumns = []
@@ -64,6 +64,7 @@ export function readRowGroup(options, { metadata, columns }, groupPlan) {
           parsers,
           compressors,
           utf8,
+          rawDictionary,
         }
         return readColumn(reader, groupPlan, columnDecoder, options.onPage)
       }),

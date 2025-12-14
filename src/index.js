@@ -2,6 +2,7 @@ import { parquetRead } from './read.js'
 
 export { parquetMetadata, parquetMetadataAsync, parquetSchema } from './metadata.js'
 export { parquetRead }
+export { parquetReadDictionary, parquetReadDictionaryCount } from './read.js'
 export { parquetQuery } from './query.js'
 export { snappyUncompress } from './snappy.js'
 export { asyncBufferFromUrl, byteLengthFromUrl, cachedAsyncBuffer, flatten, toJson } from './utils.js'
@@ -60,6 +61,8 @@ export function parquetReadObjects(options) {
  * @typedef {import('../src/types.d.ts').BoundaryOrder} BoundaryOrder
  * @typedef {import('../src/types.d.ts').ColumnData} ColumnData
  * @typedef {import('../src/types.d.ts').ParquetReadOptions} ParquetReadOptions
+ * @typedef {import('../src/types.d.ts').ParquetDictionaryOptions} ParquetDictionaryOptions
+ * @typedef {import('../src/types.d.ts').ParquetDictionaryCountOptions} ParquetDictionaryCountOptions
  * @typedef {import('../src/types.d.ts').MetadataOptions} MetadataOptions
  * @typedef {import('../src/types.d.ts').ParquetParsers} ParquetParsers
  */

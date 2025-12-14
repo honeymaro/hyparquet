@@ -31,6 +31,29 @@ export interface ParquetReadOptions {
   compressors?: Compressors // custom decompressors
   utf8?: boolean // decode byte arrays as utf8 strings (default true)
   parsers?: ParquetParsers // custom parsers to decode advanced types
+  rawDictionary?: boolean // if true, return dictionary indices instead of decoded values for categorical columns (default false)
+}
+
+/**
+ * Parquet dictionary read options for extracting categorical column categories
+ */
+export interface ParquetDictionaryOptions {
+  file: AsyncBuffer // file-like object containing parquet data
+  metadata?: FileMetaData // parquet metadata, will be parsed if not provided
+  columns: [string] // single column to extract dictionary from (required)
+  compressors?: Compressors // custom decompressors
+  utf8?: boolean // decode byte arrays as utf8 strings (default true)
+  parsers?: ParquetParsers // custom parsers to decode advanced types
+}
+
+/**
+ * Options for getting dictionary count (cardinality) of a categorical column.
+ * Faster than ParquetDictionaryOptions as it only reads the page header.
+ */
+export interface ParquetDictionaryCountOptions {
+  file: AsyncBuffer // file-like object containing parquet data
+  metadata?: FileMetaData // parquet metadata, will be parsed if not provided
+  columns: [string] // single column to get dictionary count from (required)
 }
 
 /**
@@ -432,6 +455,7 @@ export interface ColumnDecoder {
   parsers: ParquetParsers
   compressors?: Compressors
   utf8?: boolean
+  rawDictionary?: boolean
 }
 
 export interface RowGroupSelect {

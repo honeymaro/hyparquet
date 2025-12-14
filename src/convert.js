@@ -33,6 +33,11 @@ export const DEFAULT_PARSERS = {
  */
 export function convertWithDictionary(data, dictionary, encoding, columnDecoder) {
   if (dictionary && encoding.endsWith('_DICTIONARY')) {
+    // rawDictionary: return indices directly without dictionary lookup or type conversion
+    if (columnDecoder.rawDictionary) {
+      return data
+    }
+    
     let output = data
     if (data instanceof Uint8Array && !(dictionary instanceof Uint8Array)) {
       // @ts-expect-error upgrade data to match dictionary type with fancy constructor
@@ -100,7 +105,14 @@ export function convert(data, columnDecoder) {
   }
   if (ctype === 'JSON') {
     const decoder = new TextDecoder()
-    return data.map(v => JSON.parse(decoder.decode(v)))
+    return data.map(v => {
+      if (v && (v instanceof Uint8Array || v instanceof ArrayBuffer || ArrayBuffer.isView(v))) {
+        return JSON.parse(decoder.decode(v))
+      } else {
+        // If v is already a string or other type, handle appropriately
+        return typeof v === 'string' ? JSON.parse(v) : v
+      }
+    })
   }
   if (ctype === 'BSON') {
     throw new Error('parquet bson not supported')
@@ -112,7 +124,17 @@ export function convert(data, columnDecoder) {
     const decoder = new TextDecoder()
     const arr = new Array(data.length)
     for (let i = 0; i < arr.length; i++) {
-      arr[i] = data[i] && decoder.decode(data[i])
+      if (data[i]) {
+        // Ensure data[i] is a valid input for TextDecoder (Uint8Array, ArrayBuffer, etc.)
+        if (data[i] instanceof Uint8Array || data[i] instanceof ArrayBuffer || ArrayBuffer.isView(data[i])) {
+          arr[i] = decoder.decode(data[i])
+        } else {
+          // Handle case where data[i] is not a buffer-like object (e.g., already a string or number)
+          arr[i] = data[i]
+        }
+      } else {
+        arr[i] = data[i] // null or undefined
+      }
     }
     return arr
   }

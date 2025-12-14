@@ -7,6 +7,57 @@ import { isFlatColumn } from './schema.js'
 import { deserializeTCompactProtocol } from './thrift.js'
 
 /**
+ * Extract dictionary/categories from a categorical column.
+ *
+ * @param {DataReader} reader
+ * @param {ColumnDecoder} columnDecoder column decoder params
+ * @returns {DecodedArray | undefined} dictionary values for categorical column
+ */
+export function readColumnDictionary(reader, columnDecoder) {
+  /** @type {DecodedArray | undefined} */
+  let dictionary = undefined
+
+  while (reader.offset < reader.view.byteLength - 1) {
+    // read page header
+    const header = parquetHeader(reader)
+    if (header.type === 'DICTIONARY_PAGE') {
+      // read dictionary page
+      dictionary = readPage(reader, header, columnDecoder, undefined, undefined, 0)
+      dictionary = convert(dictionary, columnDecoder)
+      return dictionary // return immediately after finding dictionary
+    } else {
+      // skip non-dictionary pages
+      reader.offset += header.compressed_page_size
+    }
+  }
+
+  return dictionary
+}
+
+/**
+ * Extract dictionary count (cardinality) from a categorical column.
+ * Only reads the page header, does not decode dictionary data.
+ * Much faster than readColumnDictionary when only the count is needed.
+ *
+ * @param {DataReader} reader
+ * @returns {number | undefined} dictionary count for categorical column
+ */
+export function readColumnDictionaryCount(reader) {
+  while (reader.offset < reader.view.byteLength - 1) {
+    // read page header
+    const header = parquetHeader(reader)
+    if (header.type === 'DICTIONARY_PAGE') {
+      // return count immediately without reading page data
+      return header.dictionary_page_header?.num_values
+    } else {
+      // skip non-dictionary pages
+      reader.offset += header.compressed_page_size
+    }
+  }
+  return undefined
+}
+
+/**
  * Parse column data from a buffer.
  *
  * @param {DataReader} reader
