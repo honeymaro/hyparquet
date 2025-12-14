@@ -1,5 +1,5 @@
 import { assembleLists } from './assemble.js'
-import { Encoding, PageType } from './constants.js'
+import { Encodings, PageTypes } from './constants.js'
 import { convert, convertWithDictionary } from './convert.js'
 import { decompressPage, readDataPage, readDataPageV2 } from './datapage.js'
 import { readPlain } from './plain.js'
@@ -63,11 +63,12 @@ export function readColumnDictionaryCount(reader) {
  * @param {DataReader} reader
  * @param {RowGroupSelect} rowGroupSelect row group selection
  * @param {ColumnDecoder} columnDecoder column decoder params
- * @param {(chunk: ColumnData) => void} [onPage] callback for each page
+ * @param {(chunk: SubColumnData) => void} [onPage] callback for each page
  * @returns {DecodedArray[]}
  */
 export function readColumn(reader, { groupStart, selectStart, selectEnd }, columnDecoder, onPage) {
-  const { columnName } = columnDecoder
+  const { pathInSchema, schemaPath } = columnDecoder
+  const isFlat = isFlatColumn(schemaPath)
   /** @type {DecodedArray[]} */
   const chunks = []
   /** @type {DecodedArray | undefined} */
@@ -78,14 +79,14 @@ export function readColumn(reader, { groupStart, selectStart, selectEnd }, colum
 
   const emitLastChunk = onPage && (() => {
     lastChunk && onPage({
-      columnName,
+      pathInSchema,
       columnData: lastChunk,
       rowStart: groupStart + rowCount - lastChunk.length,
       rowEnd: groupStart + rowCount,
     })
   })
 
-  while (rowCount < selectEnd) {
+  while (isFlat ? rowCount < selectEnd : reader.offset < reader.view.byteLength - 1) {
     if (reader.offset >= reader.view.byteLength - 1) break // end of reader
 
     // read page header
@@ -198,7 +199,7 @@ export function readPage(reader, header, columnDecoder, dictionary, previousChun
 /**
  * Read parquet header from a buffer.
  *
- * @import {ColumnData, ColumnDecoder, DataReader, DecodedArray, PageHeader, RowGroupSelect} from '../src/types.d.ts'
+ * @import {ColumnDecoder, DataReader, DecodedArray, PageHeader, RowGroupSelect, SubColumnData} from '../src/types.d.ts'
  * @param {DataReader} reader
  * @returns {PageHeader}
  */
@@ -206,15 +207,15 @@ function parquetHeader(reader) {
   const header = deserializeTCompactProtocol(reader)
 
   // Parse parquet header from thrift data
-  const type = PageType[header.field_1]
+  const type = PageTypes[header.field_1]
   const uncompressed_page_size = header.field_2
   const compressed_page_size = header.field_3
   const crc = header.field_4
   const data_page_header = header.field_5 && {
     num_values: header.field_5.field_1,
-    encoding: Encoding[header.field_5.field_2],
-    definition_level_encoding: Encoding[header.field_5.field_3],
-    repetition_level_encoding: Encoding[header.field_5.field_4],
+    encoding: Encodings[header.field_5.field_2],
+    definition_level_encoding: Encodings[header.field_5.field_3],
+    repetition_level_encoding: Encodings[header.field_5.field_4],
     statistics: header.field_5.field_5 && {
       max: header.field_5.field_5.field_1,
       min: header.field_5.field_5.field_2,
@@ -227,14 +228,14 @@ function parquetHeader(reader) {
   const index_page_header = header.field_6
   const dictionary_page_header = header.field_7 && {
     num_values: header.field_7.field_1,
-    encoding: Encoding[header.field_7.field_2],
+    encoding: Encodings[header.field_7.field_2],
     is_sorted: header.field_7.field_3,
   }
   const data_page_header_v2 = header.field_8 && {
     num_values: header.field_8.field_1,
     num_nulls: header.field_8.field_2,
     num_rows: header.field_8.field_3,
-    encoding: Encoding[header.field_8.field_4],
+    encoding: Encodings[header.field_8.field_4],
     definition_levels_byte_length: header.field_8.field_5,
     repetition_levels_byte_length: header.field_8.field_6,
     is_compressed: header.field_8.field_7 === undefined ? true : header.field_8.field_7, // default true

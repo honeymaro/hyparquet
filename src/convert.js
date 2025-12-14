@@ -1,6 +1,10 @@
+import { wkbToGeojson } from './wkb.js'
+
 /**
- * @import {ColumnDecoder, DecodedArray, Encoding, ParquetParsers, SchemaElement} from '../src/types.d.ts'
+ * @import {ColumnDecoder, DecodedArray, Encoding, ParquetParsers} from '../src/types.js'
  */
+
+const decoder = new TextDecoder()
 
 /**
  * Default type parsers when no custom ones are given
@@ -17,8 +21,16 @@ export const DEFAULT_PARSERS = {
     return new Date(Number(nanos / 1000000n))
   },
   dateFromDays(days) {
-    const dayInMillis = 86400000
-    return new Date(days * dayInMillis)
+    return new Date(days * 86400000)
+  },
+  stringFromBytes(bytes) {
+    return bytes && decoder.decode(bytes)
+  },
+  geometryFromBytes(bytes) {
+    return bytes && wkbToGeojson({ view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), offset: 0 })
+  },
+  geographyFromBytes(bytes) {
+    return bytes && wkbToGeojson({ view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), offset: 0 })
   },
 }
 
@@ -67,7 +79,7 @@ export function convert(data, columnDecoder) {
     const factor = 10 ** -scale
     const arr = new Array(data.length)
     for (let i = 0; i < arr.length; i++) {
-      if (data[0] instanceof Uint8Array) {
+      if (data[i] instanceof Uint8Array) {
         arr[i] = parseDecimal(data[i]) * factor
       } else {
         arr[i] = Number(data[i]) * factor
@@ -76,43 +88,19 @@ export function convert(data, columnDecoder) {
     return arr
   }
   if (!ctype && type === 'INT96') {
-    const arr = new Array(data.length)
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = parsers.timestampFromNanoseconds(parseInt96Nanos(data[i]))
-    }
-    return arr
+    return Array.from(data).map(v => parsers.timestampFromNanoseconds(parseInt96Nanos(v)))
   }
   if (ctype === 'DATE') {
-    const arr = new Array(data.length)
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = parsers.dateFromDays(data[i])
-    }
-    return arr
+    return Array.from(data).map(v => parsers.dateFromDays(v))
   }
   if (ctype === 'TIMESTAMP_MILLIS') {
-    const arr = new Array(data.length)
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = parsers.timestampFromMilliseconds(data[i])
-    }
-    return arr
+    return Array.from(data).map(v => parsers.timestampFromMilliseconds(v))
   }
   if (ctype === 'TIMESTAMP_MICROS') {
-    const arr = new Array(data.length)
-    for (let i = 0; i < arr.length; i++) {
-      arr[i] = parsers.timestampFromMicroseconds(data[i])
-    }
-    return arr
+    return Array.from(data).map(v => parsers.timestampFromMicroseconds(v))
   }
   if (ctype === 'JSON') {
-    const decoder = new TextDecoder()
-    return data.map(v => {
-      if (v && (v instanceof Uint8Array || v instanceof ArrayBuffer || ArrayBuffer.isView(v))) {
-        return JSON.parse(decoder.decode(v))
-      } else {
-        // If v is already a string or other type, handle appropriately
-        return typeof v === 'string' ? JSON.parse(v) : v
-      }
-    })
+    return data.map(v => JSON.parse(decoder.decode(v)))
   }
   if (ctype === 'BSON') {
     throw new Error('parquet bson not supported')
@@ -120,23 +108,14 @@ export function convert(data, columnDecoder) {
   if (ctype === 'INTERVAL') {
     throw new Error('parquet interval not supported')
   }
+  if (ltype?.type === 'GEOMETRY') {
+    return data.map(v => parsers.geometryFromBytes(v))
+  }
+  if (ltype?.type === 'GEOGRAPHY') {
+    return data.map(v => parsers.geographyFromBytes(v))
+  }
   if (ctype === 'UTF8' || ltype?.type === 'STRING' || utf8 && type === 'BYTE_ARRAY') {
-    const decoder = new TextDecoder()
-    const arr = new Array(data.length)
-    for (let i = 0; i < arr.length; i++) {
-      if (data[i]) {
-        // Ensure data[i] is a valid input for TextDecoder (Uint8Array, ArrayBuffer, etc.)
-        if (data[i] instanceof Uint8Array || data[i] instanceof ArrayBuffer || ArrayBuffer.isView(data[i])) {
-          arr[i] = decoder.decode(data[i])
-        } else {
-          // Handle case where data[i] is not a buffer-like object (e.g., already a string or number)
-          arr[i] = data[i]
-        }
-      } else {
-        arr[i] = data[i] // null or undefined
-      }
-    }
-    return arr
+    return data.map(v => parsers.stringFromBytes(v))
   }
   if (ctype === 'UINT_64' || ltype?.type === 'INTEGER' && ltype.bitWidth === 64 && !ltype.isSigned) {
     if (data instanceof BigInt64Array) {
@@ -177,18 +156,20 @@ export function convert(data, columnDecoder) {
  * @returns {number}
  */
 export function parseDecimal(bytes) {
-  let value = 0
+  if (!bytes.length) return 0
+
+  let value = 0n
   for (const byte of bytes) {
-    value = value * 256 + byte
+    value = value * 256n + BigInt(byte)
   }
 
   // handle signed
   const bits = bytes.length * 8
-  if (value >= 2 ** (bits - 1)) {
-    value -= 2 ** bits
+  if (value >= 2n ** BigInt(bits - 1)) {
+    value -= 2n ** BigInt(bits)
   }
 
-  return value
+  return Number(value)
 }
 
 /**

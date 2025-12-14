@@ -1,9 +1,15 @@
-import { CompressionCodec, ConvertedType, Encoding, FieldRepetitionType, PageType, ParquetType } from './constants.js'
+import { CompressionCodecs, ConvertedTypes, EdgeInterpolationAlgorithms, Encodings, FieldRepetitionTypes, PageTypes, ParquetTypes } from './constants.js'
 import { DEFAULT_PARSERS, parseDecimal, parseFloat16 } from './convert.js'
 import { getSchemaPath } from './schema.js'
 import { deserializeTCompactProtocol } from './thrift.js'
+import { markGeoColumns } from './geoparquet.js'
 
 export const defaultInitialFetchSize = 1 << 19 // 512kb
+
+const decoder = new TextDecoder()
+function decode(/** @type {Uint8Array} */ value) {
+  return value && decoder.decode(value)
+}
 
 /**
  * Read parquet metadata from an async buffer.
@@ -29,7 +35,7 @@ export const defaultInitialFetchSize = 1 << 19 // 512kb
  * @param {MetadataOptions & { initialFetchSize?: number }} options initial fetch size in bytes (default 512kb)
  * @returns {Promise<FileMetaData>} parquet metadata object
  */
-export async function parquetMetadataAsync(asyncBuffer, { parsers, initialFetchSize = defaultInitialFetchSize } = {}) {
+export async function parquetMetadataAsync(asyncBuffer, { parsers, initialFetchSize = defaultInitialFetchSize, geoparquet = true } = {}) {
   if (!asyncBuffer || !(asyncBuffer.byteLength >= 0)) throw new Error('parquet expected AsyncBuffer')
 
   // fetch last bytes (footer) of the file
@@ -59,21 +65,22 @@ export async function parquetMetadataAsync(asyncBuffer, { parsers, initialFetchS
     const combinedView = new Uint8Array(combinedBuffer)
     combinedView.set(new Uint8Array(metadataBuffer))
     combinedView.set(new Uint8Array(footerBuffer), footerOffset - metadataOffset)
-    return parquetMetadata(combinedBuffer, { parsers })
+    return parquetMetadata(combinedBuffer, { parsers, geoparquet })
   } else {
     // parse metadata from the footer
-    return parquetMetadata(footerBuffer, { parsers })
+    return parquetMetadata(footerBuffer, { parsers, geoparquet })
   }
 }
 
 /**
  * Read parquet metadata from a buffer synchronously.
  *
+ * @import {KeyValue} from '../src/types.d.ts'
  * @param {ArrayBuffer} arrayBuffer parquet file footer
  * @param {MetadataOptions} options metadata parsing options
  * @returns {FileMetaData} parquet metadata object
  */
-export function parquetMetadata(arrayBuffer, { parsers } = {}) {
+export function parquetMetadata(arrayBuffer, { parsers, geoparquet = true } = {}) {
   if (!(arrayBuffer instanceof ArrayBuffer)) throw new Error('parquet expected ArrayBuffer')
   const view = new DataView(arrayBuffer)
 
@@ -100,21 +107,17 @@ export function parquetMetadata(arrayBuffer, { parsers } = {}) {
   const metadataOffset = metadataLengthOffset - metadataLength
   const reader = { view, offset: metadataOffset }
   const metadata = deserializeTCompactProtocol(reader)
-  const decoder = new TextDecoder()
-  function decode(/** @type {Uint8Array} */ value) {
-    return value && decoder.decode(value)
-  }
 
   // Parse metadata from thrift data
   const version = metadata.field_1
   /** @type {SchemaElement[]} */
   const schema = metadata.field_2.map((/** @type {any} */ field) => ({
-    type: ParquetType[field.field_1],
+    type: ParquetTypes[field.field_1],
     type_length: field.field_2,
-    repetition_type: FieldRepetitionType[field.field_3],
+    repetition_type: FieldRepetitionTypes[field.field_3],
     name: decode(field.field_4),
     num_children: field.field_5,
-    converted_type: ConvertedType[field.field_6],
+    converted_type: ConvertedTypes[field.field_6],
     scale: field.field_7,
     precision: field.field_8,
     field_id: field.field_9,
@@ -128,21 +131,24 @@ export function parquetMetadata(arrayBuffer, { parsers } = {}) {
       file_path: decode(column.field_1),
       file_offset: column.field_2,
       meta_data: column.field_3 && {
-        type: ParquetType[column.field_3.field_1],
-        encodings: column.field_3.field_2?.map((/** @type {number} */ e) => Encoding[e]),
+        type: ParquetTypes[column.field_3.field_1],
+        encodings: column.field_3.field_2?.map((/** @type {number} */ e) => Encodings[e]),
         path_in_schema: column.field_3.field_3.map(decode),
-        codec: CompressionCodec[column.field_3.field_4],
+        codec: CompressionCodecs[column.field_3.field_4],
         num_values: column.field_3.field_5,
         total_uncompressed_size: column.field_3.field_6,
         total_compressed_size: column.field_3.field_7,
-        key_value_metadata: column.field_3.field_8,
+        key_value_metadata: column.field_3.field_8?.map((/** @type {any} */ kv) => ({
+          key: decode(kv.field_1),
+          value: decode(kv.field_2),
+        })),
         data_page_offset: column.field_3.field_9,
         index_page_offset: column.field_3.field_10,
         dictionary_page_offset: column.field_3.field_11,
         statistics: convertStats(column.field_3.field_12, columnSchema[columnIndex], parsers),
         encoding_stats: column.field_3.field_13?.map((/** @type {any} */ encodingStat) => ({
-          page_type: PageType[encodingStat.field_1],
-          encoding: Encoding[encodingStat.field_2],
+          page_type: PageTypes[encodingStat.field_1],
+          encoding: Encodings[encodingStat.field_2],
           count: encodingStat.field_3,
         })),
         bloom_filter_offset: column.field_3.field_14,
@@ -151,6 +157,19 @@ export function parquetMetadata(arrayBuffer, { parsers } = {}) {
           unencoded_byte_array_data_bytes: column.field_3.field_16.field_1,
           repetition_level_histogram: column.field_3.field_16.field_2,
           definition_level_histogram: column.field_3.field_16.field_3,
+        },
+        geospatial_statistics: column.field_3.field_17 && {
+          bbox: column.field_3.field_17.field_1 && {
+            xmin: column.field_3.field_17.field_1.field_1,
+            xmax: column.field_3.field_17.field_1.field_2,
+            ymin: column.field_3.field_17.field_1.field_3,
+            ymax: column.field_3.field_17.field_1.field_4,
+            zmin: column.field_3.field_17.field_1.field_5,
+            zmax: column.field_3.field_17.field_1.field_6,
+            mmin: column.field_3.field_17.field_1.field_7,
+            mmax: column.field_3.field_17.field_1.field_8,
+          },
+          geospatial_types: column.field_3.field_17.field_2,
         },
       },
       offset_index_offset: column.field_4,
@@ -171,11 +190,16 @@ export function parquetMetadata(arrayBuffer, { parsers } = {}) {
     total_compressed_size: rowGroup.field_6,
     ordinal: rowGroup.field_7,
   }))
-  const key_value_metadata = metadata.field_5?.map((/** @type {any} */ keyValue) => ({
-    key: decode(keyValue.field_1),
-    value: decode(keyValue.field_2),
+  /** @type {KeyValue[] | undefined} */
+  const key_value_metadata = metadata.field_5?.map((/** @type {any} */ kv) => ({
+    key: decode(kv.field_1),
+    value: decode(kv.field_2),
   }))
   const created_by = decode(metadata.field_6)
+
+  if (geoparquet) {
+    markGeoColumns(schema, key_value_metadata)
+  }
 
   return {
     version,
@@ -233,6 +257,19 @@ function logicalType(logicalType) {
   if (logicalType?.field_13) return { type: 'BSON' }
   if (logicalType?.field_14) return { type: 'UUID' }
   if (logicalType?.field_15) return { type: 'FLOAT16' }
+  if (logicalType?.field_16) return {
+    type: 'VARIANT',
+    specification_version: logicalType.field_16.field_1,
+  }
+  if (logicalType?.field_17) return {
+    type: 'GEOMETRY',
+    crs: decode(logicalType.field_17.field_1),
+  }
+  if (logicalType?.field_18) return {
+    type: 'GEOGRAPHY',
+    crs: decode(logicalType.field_18.field_1),
+    algorithm: EdgeInterpolationAlgorithms[logicalType.field_18.field_2],
+  }
   return logicalType
 }
 
@@ -279,7 +316,7 @@ export function convertMetadata(value, schema, parsers) {
   const { type, converted_type, logical_type } = schema
   if (value === undefined) return value
   if (type === 'BOOLEAN') return value[0] === 1
-  if (type === 'BYTE_ARRAY') return new TextDecoder().decode(value)
+  if (type === 'BYTE_ARRAY') return parsers.stringFromBytes(value)
   const view = new DataView(value.buffer, value.byteOffset, value.byteLength)
   if (type === 'FLOAT' && view.byteLength === 4) return view.getFloat32(0, true)
   if (type === 'DOUBLE' && view.byteLength === 8) return view.getFloat64(0, true)

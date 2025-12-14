@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { asyncBufferFromUrl, byteLengthFromUrl, toJson } from '../src/utils.js'
+import { asyncBufferFromUrl, byteLengthFromUrl, cachedAsyncBuffer, concat, equals, flatten, toJson } from '../src/utils.js'
 
 describe('toJson', () => {
   it('convert undefined to null', () => {
@@ -56,13 +56,21 @@ describe('byteLengthFromUrl', () => {
     await expect(byteLengthFromUrl('https://example.com')).rejects.toThrow('fetch head failed 404')
   })
 
-  it('throws an error if Content-Length header is missing', async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      headers: new Map(),
-    })
+  it('falls back to GET with range if Content-Length header is missing from HEAD', async () => {
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 206,
+        headers: new Map([['Content-Range', 'bytes 0-0/2048']]),
+      })
 
-    await expect(byteLengthFromUrl('https://example.com')).rejects.toThrow('missing content length')
+    const result = await byteLengthFromUrl('https://example.com', undefined, customFetch)
+    expect(result).toBe(2048)
+    expect(customFetch).toHaveBeenCalledTimes(2)
   })
 
 
@@ -94,6 +102,137 @@ describe('byteLengthFromUrl', () => {
     const result = await byteLengthFromUrl('https://example.com', requestInit, customFetch)
     expect(result).toBe(2048)
     expect(customFetch).toHaveBeenCalledWith('https://example.com', { ...requestInit, method: 'HEAD' })
+  })
+
+  it('falls back to ranged GET when HEAD returns 403', async () => {
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 206,
+        headers: new Map([['Content-Range', 'bytes 0-0/9446073']]),
+      })
+
+    const result = await byteLengthFromUrl('https://example.com', undefined, customFetch)
+    expect(result).toBe(9446073)
+    expect(customFetch).toHaveBeenCalledTimes(2)
+    expect(customFetch).toHaveBeenNthCalledWith(1, 'https://example.com', { method: 'HEAD' })
+  })
+
+  it('fallback throws error if Content-Range header is missing on 206 response', async () => {
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 206,
+        headers: new Map(),
+      })
+
+    await expect(byteLengthFromUrl('https://example.com', undefined, customFetch)).rejects.toThrow('missing content-range header')
+  })
+
+  it('fallback throws error if Content-Range header is invalid', async () => {
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 206,
+        headers: new Map([['Content-Range', 'invalid format']]),
+      })
+
+    await expect(byteLengthFromUrl('https://example.com', undefined, customFetch)).rejects.toThrow('invalid content-range header')
+  })
+
+  it('fallback uses Content-Length when server returns 200 (Range not supported)', async () => {
+    const mockArrayBuffer = new ArrayBuffer(5242880)
+
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Map([['Content-Length', '5242880']]),
+        arrayBuffer: () => Promise.resolve(mockArrayBuffer),
+      })
+
+    const result = await byteLengthFromUrl('https://example.com', undefined, customFetch)
+    expect(result).toBe(5242880)
+  })
+
+  it('fallback throws error when server returns 200 without Content-Length', async () => {
+    const customFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        body: null,
+      })
+
+    await expect(byteLengthFromUrl('https://example.com', undefined, customFetch)).rejects.toThrow(
+      'server does not support range requests and missing content-length'
+    )
+  })
+
+  describe('fetch with AbortController', () => {
+    it('aborts request when server returns 200 with Content-Length', async () => {
+      let capturedSignal = null
+
+      const customFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: 403 }) // HEAD fails
+        .mockImplementation((url, options) => { // GET returns 200
+          capturedSignal = options.signal
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Map([['Content-Length', '5242880']]),
+          })
+        })
+
+      const result = await byteLengthFromUrl('https://example.com', undefined, customFetch)
+      expect(result).toBe(5242880)
+      expect(capturedSignal).toBeDefined()
+      // @ts-ignore - capturedSignal is assigned in the mock
+      expect(capturedSignal.aborted).toBe(true)
+    })
+
+    it('does not abort when server returns 206', async () => {
+      let capturedSignal = null
+
+      const customFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: 403 }) // HEAD fails
+        .mockImplementation((url, options) => { // GET returns 206
+          capturedSignal = options.signal
+          return Promise.resolve({
+            ok: true,
+            status: 206,
+            headers: new Map([['Content-Range', 'bytes 0-0/9446073']]),
+          })
+        })
+
+      const result = await byteLengthFromUrl('https://example.com', undefined, customFetch)
+      expect(result).toBe(9446073)
+      expect(capturedSignal).toBeDefined()
+      // @ts-ignore - capturedSignal is assigned in the mock
+      expect(capturedSignal.aborted).toBe(false)
+    })
+
+    it('passes abort signal to fetch', async () => {
+      const customFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: 403 }) // HEAD fails
+        .mockResolvedValueOnce({ // GET returns 206
+          ok: true,
+          status: 206,
+          headers: new Map([['Content-Range', 'bytes 0-0/1024']]),
+        })
+
+      await byteLengthFromUrl('https://example.com', undefined, customFetch)
+
+      // Check second call (the GET with range)
+      const secondCallArgs = customFetch.mock.calls[1]
+      expect(secondCallArgs[1]).toHaveProperty('signal')
+      expect(secondCallArgs[1].signal).toBeInstanceOf(AbortSignal)
+    })
   })
 })
 
@@ -155,6 +294,13 @@ describe('asyncBufferFromUrl', () => {
 
     const buffer = await asyncBufferFromUrl({ url: 'https://example.com', byteLength: 1024 })
     await expect(buffer.slice(0, 100)).rejects.toThrow('fetch failed 404')
+  })
+
+  it('slice method throws an error for unexpected status code', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({ ok: true, body: {}, status: 204 })
+
+    const buffer = await asyncBufferFromUrl({ url: 'https://example.com', byteLength: 1024 })
+    await expect(buffer.slice(0, 100)).rejects.toThrow('fetch received unexpected status code 204')
   })
 
   it('passes authentication headers to get the byteLength', async () => {
@@ -276,5 +422,106 @@ describe('asyncBufferFromUrl', () => {
       expect(result).toBe(mockArrayBuffer)
       expect(customFetch).toHaveBeenCalledWith('https://example.com', { headers: new Headers({ ...requestInit.headers, Range: 'bytes=50-84' }) })
     })
+  })
+})
+
+describe('concat', () => {
+  it('concatenates arrays in chunks', () => {
+    const aaa = [1, 2, 3]
+    const bbb = new Array(25000).fill(0)
+    concat(aaa, bbb)
+    expect(aaa.length).toBe(25003)
+  })
+})
+
+describe('equals', () => {
+  it('compares primitives with strict equality', () => {
+    expect(equals(1, 1, true)).toBe(true)
+    expect(equals(1, '1', true)).toBe(false)
+    expect(equals(1, '1', false)).toBe(true)
+  })
+
+  it('compares Uint8Arrays', () => {
+    expect(equals(new Uint8Array([1, 2]), new Uint8Array([1, 2]), true)).toBe(true)
+    expect(equals(new Uint8Array([1]), new Uint8Array([2]), true)).toBe(false)
+  })
+
+  it('returns false for null/undefined comparisons', () => {
+    expect(equals(null, {}, true)).toBe(false)
+    expect(equals({}, null, true)).toBe(false)
+  })
+
+  it('compares arrays', () => {
+    expect(equals([1, 2], [1, 2], true)).toBe(true)
+    expect(equals([1, 2], [1, 3], true)).toBe(false)
+    expect(equals([1], [1, 2], true)).toBe(false)
+  })
+
+  it('returns false for different primitive types', () => {
+    expect(equals(1, 'a', true)).toBe(false)
+  })
+
+  it('compares objects', () => {
+    expect(equals({ a: 1 }, { a: 1 }, true)).toBe(true)
+    expect(equals({ a: 1 }, { a: 2 }, true)).toBe(false)
+    expect(equals({ a: 1 }, { a: 1, b: 2 }, true)).toBe(false)
+  })
+})
+
+describe('cachedAsyncBuffer', () => {
+  it('caches whole file when small', async () => {
+    let sliceCalls = 0
+    const buffer = cachedAsyncBuffer({
+      byteLength: 100,
+      slice(start, end = 100) {
+        sliceCalls++
+        return new ArrayBuffer(end - start)
+      },
+    }, { minSize: 200 })
+
+    await buffer.slice(0, 10)
+    await buffer.slice(0, 10)
+    expect(sliceCalls).toBe(1)
+  })
+
+  it('caches slices for large files', async () => {
+    let sliceCalls = 0
+    const buffer = cachedAsyncBuffer({
+      byteLength: 1000,
+      slice(start, end) {
+        sliceCalls++
+        return new ArrayBuffer((end ?? 1000) - start)
+      },
+    }, { minSize: 100 })
+
+    await buffer.slice(0, 10)
+    await buffer.slice(0, 10)
+    await buffer.slice(10, 20)
+    expect(sliceCalls).toBe(2)
+  })
+
+  it('handles suffix ranges and undefined end', async () => {
+    const buffer = cachedAsyncBuffer({
+      byteLength: 1000,
+      slice() { return new ArrayBuffer(10) },
+    }, { minSize: 100 })
+
+    await buffer.slice(-10)
+    await buffer.slice(100)
+    expect(buffer.byteLength).toBe(1000)
+  })
+})
+
+describe('flatten', () => {
+  it('returns empty array for undefined', () => {
+    expect(flatten(undefined)).toEqual([])
+  })
+
+  it('returns single chunk unwrapped', () => {
+    expect(flatten([[1, 2, 3]])).toEqual([1, 2, 3])
+  })
+
+  it('flattens multiple chunks', () => {
+    expect(flatten([[1, 2], [3, 4]])).toEqual([1, 2, 3, 4])
   })
 })

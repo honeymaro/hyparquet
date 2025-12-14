@@ -20,7 +20,7 @@ describe('parquetRead', () => {
       .rejects.toThrow('parquet expected AsyncBuffer')
   })
 
-  it('filter by row', async () => {
+  it('read row range', async () => {
     const file = await asyncBufferFromFile('test/files/rowgroups.parquet')
     await parquetRead({
       file,
@@ -32,7 +32,7 @@ describe('parquetRead', () => {
     })
   })
 
-  it('filter by row overestimate', async () => {
+  it('row range overestimate', async () => {
     const file = await asyncBufferFromFile('test/files/rowgroups.parquet')
     await parquetRead({
       file,
@@ -183,9 +183,23 @@ describe('parquetRead', () => {
     expect(convertWithDictionary).toHaveBeenCalledTimes(4)
   })
 
+  it('reads only required row groups on the boundary', async () => {
+    const originalFile = await asyncBufferFromFile('test/files/alpha.parquet')
+    const metadata = await parquetMetadataAsync(originalFile)
+    const file = countingBuffer(originalFile)
+    await parquetReadObjects({
+      file,
+      metadata,
+      rowStart: 100,
+      rowEnd: 200,
+    })
+    expect(file.fetches).toBe(1) // 1 rowgroup
+    expect(file.bytes).toBe(441) // bytes for 2nd rowgroup
+  })
+
   it('reads individual pages', async () => {
     const file = countingBuffer(await asyncBufferFromFile('test/files/page_indexed.parquet'))
-    /** @type {import('../src/types.js').ColumnData[]} */
+    /** @type {import('../src/types.js').SubColumnData[]} */
     const pages = []
 
     // check onPage callback
@@ -198,13 +212,13 @@ describe('parquetRead', () => {
 
     const expectedPages = [
       {
-        columnName: 'row',
+        pathInSchema: ['row'],
         columnData: Array.from({ length: 100 }, (_, i) => BigInt(i)),
         rowStart: 0,
         rowEnd: 100,
       },
       {
-        columnName: 'quality',
+        pathInSchema: ['quality'],
         columnData: [
           'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'good', 'bad', 'bad', 'bad',
           'good', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad',
@@ -221,13 +235,13 @@ describe('parquetRead', () => {
         rowEnd: 100,
       },
       {
-        columnName: 'row',
+        pathInSchema: ['row'],
         columnData: Array.from({ length: 100 }, (_, i) => BigInt(i + 100)),
         rowStart: 100,
         rowEnd: 200,
       },
       {
-        columnName: 'quality',
+        pathInSchema: ['quality'],
         columnData: [
           'good', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'good',
           'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad', 'bad',
@@ -247,7 +261,7 @@ describe('parquetRead', () => {
 
     // expect each page to exist in expected
     for (const expected of expectedPages) {
-      const page = pages.find(p => p.columnName === expected.columnName && p.rowStart === expected.rowStart)
+      const page = pages.find(p => p.pathInSchema[0] === expected.pathInSchema[0] && p.rowStart === expected.rowStart)
       expect(page).toEqual(expected)
     }
     expect(file.fetches).toBe(3) // 1 metadata, 2 rowgroups

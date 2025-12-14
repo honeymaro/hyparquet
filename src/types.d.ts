@@ -1,11 +1,15 @@
+
 /**
  * Custom parsers for columns
  */
 export interface ParquetParsers {
-  timestampFromMilliseconds(millis: bigint): any;
-  timestampFromMicroseconds(micros: bigint): any;
-  timestampFromNanoseconds(nanos: bigint): any;
-  dateFromDays(days: number): any;
+  timestampFromMilliseconds(millis: bigint): any
+  timestampFromMicroseconds(micros: bigint): any
+  timestampFromNanoseconds(nanos: bigint): any
+  dateFromDays(days: number): any
+  stringFromBytes(bytes: Uint8Array): any
+  geometryFromBytes(bytes: Uint8Array): any
+  geographyFromBytes(bytes: Uint8Array): any
 }
 
 /**
@@ -13,24 +17,26 @@ export interface ParquetParsers {
  */
 export interface MetadataOptions {
   parsers?: ParquetParsers // custom parsers to decode advanced types
+  geoparquet?: boolean // parse geoparquet metadata and set logical type to geometry/geography for geospatial columns (default true)
 }
 
 /**
  * Parquet query options for reading data
  */
-export interface ParquetReadOptions {
+export interface BaseParquetReadOptions {
   file: AsyncBuffer // file-like object containing parquet data
   metadata?: FileMetaData // parquet metadata, will be parsed if not provided
   columns?: string[] // columns to read, all columns if undefined
-  rowFormat?: 'object' | 'array' // format of each row passed to the onComplete function
+  filter?: ParquetQueryFilter // best-effort pushdown filter, NOT GUARANTEED to be applied
+  filterStrict?: boolean // if true filtering uses strict equality (default true)
   rowStart?: number // first requested row index (inclusive)
   rowEnd?: number // last requested row index (exclusive)
   onChunk?: (chunk: ColumnData) => void // called when a column chunk is parsed. chunks may contain data outside the requested range.
-  onPage?: (chunk: ColumnData) => void // called when a data page is parsed. pages may contain data outside the requested range.
-  onComplete?: (rows: any[][]) => void // called when all requested rows and columns are parsed
+  onPage?: (chunk: SubColumnData) => void // called when a data page is parsed. pages may contain data outside the requested range.
   compressors?: Compressors // custom decompressors
   utf8?: boolean // decode byte arrays as utf8 strings (default true)
   parsers?: ParquetParsers // custom parsers to decode advanced types
+  geoparquet?: boolean // parse geoparquet metadata and set logical type to geometry/geography for geospatial columns (default true)
   rawDictionary?: boolean // if true, return dictionary indices instead of decoded values for categorical columns (default false)
 }
 
@@ -56,6 +62,16 @@ export interface ParquetDictionaryCountOptions {
   columns: [string] // single column to get dictionary count from (required)
 }
 
+interface ArrayRowFormat {
+  rowFormat?: 'array' // format of each row passed to the onComplete function. Can be omitted, as it's the default.
+  onComplete?: (rows: any[][]) => void // called when all requested rows and columns are parsed
+}
+interface ObjectRowFormat {
+  rowFormat: 'object' // format of each row passed to the onComplete function
+  onComplete?: (rows: Record<string, any>[]) => void // called when all requested rows and columns are parsed
+}
+export type ParquetReadOptions = BaseParquetReadOptions & (ArrayRowFormat | ObjectRowFormat)
+
 /**
  * Parquet query options for filtering data
  */
@@ -65,7 +81,7 @@ export type ParquetQueryFilter =
   | { $or: ParquetQueryFilter[] }
   | { $nor: ParquetQueryFilter[] }
 type ParquetQueryColumnsFilter = { [key: string]: ParquetQueryOperator }
-export type ParquetQueryValue = string | number | boolean | object | null | undefined
+export type ParquetQueryValue = string | number | bigint | boolean | object | null | undefined
 export type ParquetQueryOperator = {
   $gt?: ParquetQueryValue
   $gte?: ParquetQueryValue
@@ -83,6 +99,15 @@ export type ParquetQueryOperator = {
  */
 export interface ColumnData {
   columnName: string
+  columnData: DecodedArray
+  rowStart: number
+  rowEnd: number // exclusive
+}
+/**
+ * A run of sub-column data (pre-assembly)
+ */
+export interface SubColumnData {
+  pathInSchema: string[]
   columnData: DecodedArray
   rowStart: number
   rowEnd: number // exclusive
@@ -141,97 +166,67 @@ export interface SchemaElement {
 }
 
 export type ParquetType =
-  'BOOLEAN' |
-  'INT32' |
-  'INT64' |
-  'INT96' | // deprecated
-  'FLOAT' |
-  'DOUBLE' |
-  'BYTE_ARRAY' |
-  'FIXED_LEN_BYTE_ARRAY'
+  | 'BOOLEAN'
+  | 'INT32'
+  | 'INT64'
+  | 'INT96' // deprecated
+  | 'FLOAT'
+  | 'DOUBLE'
+  | 'BYTE_ARRAY'
+  | 'FIXED_LEN_BYTE_ARRAY'
 
 export type FieldRepetitionType =
-  'REQUIRED' |
-  'OPTIONAL' |
-  'REPEATED'
+  | 'REQUIRED'
+  | 'OPTIONAL'
+  | 'REPEATED'
 
 export type ConvertedType =
-  'UTF8' |
-  'MAP' |
-  'MAP_KEY_VALUE' |
-  'LIST' |
-  'ENUM' |
-  'DECIMAL' |
-  'DATE' |
-  'TIME_MILLIS' |
-  'TIME_MICROS' |
-  'TIMESTAMP_MILLIS' |
-  'TIMESTAMP_MICROS' |
-  'UINT_8' |
-  'UINT_16' |
-  'UINT_32' |
-  'UINT_64' |
-  'INT_8' |
-  'INT_16' |
-  'INT_32' |
-  'INT_64' |
-  'JSON' |
-  'BSON' |
-  'INTERVAL'
-
-type LogicalDecimalType = {
-  type: 'DECIMAL'
-  precision: number
-  scale: number
-}
+  | 'UTF8'
+  | 'MAP'
+  | 'MAP_KEY_VALUE'
+  | 'LIST'
+  | 'ENUM'
+  | 'DECIMAL'
+  | 'DATE'
+  | 'TIME_MILLIS'
+  | 'TIME_MICROS'
+  | 'TIMESTAMP_MILLIS'
+  | 'TIMESTAMP_MICROS'
+  | 'UINT_8'
+  | 'UINT_16'
+  | 'UINT_32'
+  | 'UINT_64'
+  | 'INT_8'
+  | 'INT_16'
+  | 'INT_32'
+  | 'INT_64'
+  | 'JSON'
+  | 'BSON'
+  | 'INTERVAL'
 
 export type TimeUnit = 'MILLIS' | 'MICROS' | 'NANOS'
 
-type LogicalTimeType = {
-  type: 'TIME'
-  isAdjustedToUTC: boolean
-  unit: TimeUnit
-}
-
-type LogicalTimestampType = {
-  type: 'TIMESTAMP'
-  isAdjustedToUTC: boolean
-  unit: TimeUnit
-}
-
-type LogicalIntType = {
-  type: 'INTEGER'
-  bitWidth: number
-  isSigned: boolean
-}
+type EdgeInterpolationAlgorithm = 'SPHERICAL' | 'VINCENTY' | 'THOMAS' | 'ANDOYER' | 'KARNEY'
 
 export type LogicalType =
-  { type: LogicalTypeSimple } |
-  LogicalDecimalType |
-  LogicalTimeType |
-  LogicalTimestampType |
-  LogicalIntType
-
-type LogicalTypeSimple =
-  'STRING' |
-  'MAP' |
-  'LIST' |
-  'ENUM' |
-  'DATE' |
-  'INTERVAL' |
-  'NULL' |
-  'JSON' |
-  'BSON' |
-  'UUID' |
-  'FLOAT16' |
-  'VARIANT' |
-  'GEOMETRY' |
-  'GEOGRAPHY'
-
-export type LogicalTypeType = LogicalTypeSimple |
-  'TIME' | // convertedType TIME_MILLIS or TIME_MICROS
-  'TIMESTAMP' | // convertedType TIMESTAMP_MILLIS or TIMESTAMP_MICROS
-  'INTEGER' // convertedType INT or UINT
+  | { type: 'STRING' }
+  | { type: 'MAP' }
+  | { type: 'LIST' }
+  | { type: 'ENUM' }
+  | { type: 'DATE' }
+  | { type: 'INTERVAL' }
+  | { type: 'NULL' }
+  | { type: 'JSON' }
+  | { type: 'BSON' }
+  | { type: 'UUID' }
+  | { type: 'FLOAT16' }
+  | { type: 'DECIMAL', precision: number, scale: number }
+  | { type: 'TIME', isAdjustedToUTC: boolean, unit: TimeUnit }
+  | { type: 'TIMESTAMP', isAdjustedToUTC: boolean, unit: TimeUnit }
+  | { type: 'INTEGER', bitWidth: number, isSigned: boolean }
+  | { type: 'VARIANT', specification_version?: number }
+  | { type: 'GEOMETRY', crs?: string }
+  | { type: 'GEOGRAPHY', crs?: string, algorithm?: EdgeInterpolationAlgorithm }
 
 export interface RowGroup {
   columns: ColumnChunk[]
@@ -272,31 +267,32 @@ export interface ColumnMetaData {
   bloom_filter_offset?: bigint
   bloom_filter_length?: number
   size_statistics?: SizeStatistics
+  geospatial_statistics?: GeospatialStatistics
 }
 
 type ColumnCryptoMetaData = Record<string, never>
 
 export type Encoding =
-  'PLAIN' |
-  'GROUP_VAR_INT' | // deprecated
-  'PLAIN_DICTIONARY' |
-  'RLE' |
-  'BIT_PACKED' | // deprecated
-  'DELTA_BINARY_PACKED' |
-  'DELTA_LENGTH_BYTE_ARRAY' |
-  'DELTA_BYTE_ARRAY' |
-  'RLE_DICTIONARY' |
-  'BYTE_STREAM_SPLIT'
+  | 'PLAIN'
+  | 'GROUP_VAR_INT' // deprecated
+  | 'PLAIN_DICTIONARY'
+  | 'RLE'
+  | 'BIT_PACKED' // deprecated
+  | 'DELTA_BINARY_PACKED'
+  | 'DELTA_LENGTH_BYTE_ARRAY'
+  | 'DELTA_BYTE_ARRAY'
+  | 'RLE_DICTIONARY'
+  | 'BYTE_STREAM_SPLIT'
 
 export type CompressionCodec =
-  'UNCOMPRESSED' |
-  'SNAPPY' |
-  'GZIP' |
-  'LZO' |
-  'BROTLI' |
-  'LZ4' |
-  'ZSTD' |
-  'LZ4_RAW'
+  | 'UNCOMPRESSED'
+  | 'SNAPPY'
+  | 'GZIP'
+  | 'LZO'
+  | 'BROTLI'
+  | 'LZ4'
+  | 'ZSTD'
+  | 'LZ4_RAW'
 
 export type Compressors = {
   [K in CompressionCodec]?: (input: Uint8Array, outputLength: number) => Uint8Array
@@ -324,6 +320,22 @@ interface SizeStatistics {
   unencoded_byte_array_data_bytes?: bigint
   repetition_level_histogram?: bigint[]
   definition_level_histogram?: bigint[]
+}
+
+export interface GeospatialStatistics {
+  bbox?: BoundingBox
+  geospatial_types?: number[]
+}
+
+export interface BoundingBox {
+  xmin: number
+  xmax: number
+  ymin: number
+  ymax: number
+  zmin?: number
+  zmax?: number
+  mmin?: number
+  mmax?: number
 }
 
 interface PageEncodingStats {
@@ -390,14 +402,14 @@ interface DataPage {
 }
 
 export type DecodedArray =
-  Uint8Array |
-  Uint32Array |
-  Int32Array |
-  BigInt64Array |
-  BigUint64Array |
-  Float32Array |
-  Float64Array |
-  any[]
+  | Uint8Array
+  | Uint32Array
+  | Int32Array
+  | BigInt64Array
+  | BigUint64Array
+  | Float32Array
+  | Float64Array
+  | any[]
 
 export interface OffsetIndex {
   page_locations: PageLocation[]
@@ -447,7 +459,7 @@ interface GroupPlan {
 }
 
 export interface ColumnDecoder {
-  columnName: string
+  pathInSchema: string[]
   type: ParquetType
   element: SchemaElement
   schemaPath: SchemaTree[]
@@ -473,4 +485,66 @@ export interface AsyncRowGroup {
   groupStart: number
   groupRows: number
   asyncColumns: AsyncColumn[]
+}
+
+/**
+ * Geometry types based on the GeoJSON specification (RFC 7946)
+ */
+export type Geometry =
+  | Point
+  | MultiPoint
+  | LineString
+  | MultiLineString
+  | Polygon
+  | MultiPolygon
+  | GeometryCollection
+
+/**
+ * Position is an array of at least two numbers.
+ * The order should be [longitude, latitude] with optional properties (eg- altitude).
+ */
+export type Position = number[]
+
+export interface Point {
+  type: 'Point'
+  coordinates: Position
+}
+
+export interface MultiPoint {
+  type: 'MultiPoint'
+  coordinates: Position[]
+}
+
+export interface LineString {
+  type: 'LineString'
+  coordinates: Position[]
+}
+
+/**
+ * Each element is one LineString.
+ */
+export interface MultiLineString {
+  type: 'MultiLineString'
+  coordinates: Position[][]
+}
+
+/**
+ * Each element is a linear ring.
+ */
+export interface Polygon {
+  type: 'Polygon'
+  coordinates: Position[][]
+}
+
+/**
+ * Each element is one Polygon.
+ */
+export interface MultiPolygon {
+  type: 'MultiPolygon'
+  coordinates: Position[][][]
+}
+
+export interface GeometryCollection {
+  type: 'GeometryCollection'
+  geometries: Geometry[]
 }

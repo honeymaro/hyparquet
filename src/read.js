@@ -8,7 +8,7 @@ import { DEFAULT_PARSERS } from './convert.js'
 import { concat, flatten } from './utils.js'
 
 /**
- * @import {AsyncBuffer, AsyncRowGroup, DecodedArray, FileMetaData, ParquetReadOptions, ParquetDictionaryOptions, ParquetDictionaryCountOptions} from '../src/types.js'
+ * @import {AsyncRowGroup, DecodedArray, ParquetReadOptions, BaseParquetReadOptions, ParquetDictionaryOptions, ParquetDictionaryCountOptions} from '../src/types.js'
  */
 /**
  * Read parquet data rows from a file-like object.
@@ -24,10 +24,10 @@ import { concat, flatten } from './utils.js'
  */
 export async function parquetRead(options) {
   // load metadata if not provided
-  options.metadata ??= await parquetMetadataAsync(options.file)
+  options.metadata ??= await parquetMetadataAsync(options.file, options)
 
   // read row groups
-  const asyncGroups = await parquetReadAsync(options)
+  const asyncGroups = parquetReadAsync(options)
 
   const { rowStart = 0, rowEnd, columns, onChunk, onComplete, rowFormat } = options
 
@@ -65,15 +65,18 @@ export async function parquetRead(options) {
 
   // onComplete transpose column chunks to rows
   if (onComplete) {
-    /** @type {any[][]} */
+    // loosen the types to avoid duplicate code
+    /** @type {any[]} */
     const rows = []
     for (const asyncGroup of assembled) {
       // filter to rows in range
       const selectStart = Math.max(rowStart - asyncGroup.groupStart, 0)
       const selectEnd = Math.min((rowEnd ?? Infinity) - asyncGroup.groupStart, asyncGroup.groupRows)
       // transpose column chunks to rows in output
-      const groupData = await asyncGroupToRows(asyncGroup, selectStart, selectEnd, columns, rowFormat)
-      concat(rows, groupData.slice(selectStart, selectEnd))
+      const groupData = rowFormat === 'object' ?
+        await asyncGroupToRows(asyncGroup, selectStart, selectEnd, columns, 'object') :
+        await asyncGroupToRows(asyncGroup, selectStart, selectEnd, columns, 'array')
+      concat(rows, groupData)
     }
     onComplete(rows)
   } else {
@@ -103,14 +106,14 @@ export function parquetReadAsync(options) {
 /**
  * Reads a single column from a parquet file.
  *
- * @param {ParquetReadOptions} options
+ * @param {BaseParquetReadOptions} options
  * @returns {Promise<DecodedArray>}
  */
 export async function parquetReadColumn(options) {
   if (options.columns?.length !== 1) {
     throw new Error('parquetReadColumn expected columns: [columnName]')
   }
-  options.metadata ??= await parquetMetadataAsync(options.file)
+  options.metadata ??= await parquetMetadataAsync(options.file, options)
   const asyncGroups = parquetReadAsync(options)
 
   // assemble struct columns
@@ -126,6 +129,23 @@ export async function parquetReadColumn(options) {
 }
 
 /**
+ * This is a helper function to read parquet row data as a promise.
+ * It is a wrapper around the more configurable parquetRead function.
+ *
+ * @param {Omit<ParquetReadOptions, 'onComplete'>} options
+ * @returns {Promise<Record<string, any>[]>} resolves when all requested rows and columns are parsed
+ */
+export function parquetReadObjects(options) {
+  return new Promise((onComplete, reject) => {
+    parquetRead({
+      ...options,
+      rowFormat: 'object', // force object output
+      onComplete,
+    }).catch(reject)
+  })
+}
+
+/**
  * Extracts categorical column dictionary/categories from a parquet file.
  * Useful for getting unique values of categorical columns.
  *
@@ -138,7 +158,7 @@ export async function parquetReadDictionary(options) {
   }
 
   const columnName = options.columns[0]
-  options.metadata ??= await parquetMetadataAsync(options.file)
+  options.metadata ??= await parquetMetadataAsync(options.file, options)
 
   let columnFound = false
 
@@ -199,7 +219,7 @@ export async function parquetReadDictionaryCount(options) {
   }
 
   const columnName = options.columns[0]
-  options.metadata ??= await parquetMetadataAsync(options.file)
+  options.metadata ??= await parquetMetadataAsync(options.file, options)
 
   let columnFound = false
 

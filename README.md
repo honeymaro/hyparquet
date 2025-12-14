@@ -6,44 +6,26 @@
 [![minzipped](https://img.shields.io/bundlephobia/minzip/hyparquet)](https://www.npmjs.com/package/hyparquet)
 [![workflow status](https://github.com/hyparam/hyparquet/actions/workflows/ci.yml/badge.svg)](https://github.com/hyparam/hyparquet/actions)
 [![mit license](https://img.shields.io/badge/License-MIT-orange.svg)](https://opensource.org/licenses/MIT)
-![coverage](https://img.shields.io/badge/Coverage-96-darkred)
+![coverage](https://img.shields.io/badge/Coverage-92-darkred)
 [![dependencies](https://img.shields.io/badge/Dependencies-0-blueviolet)](https://www.npmjs.com/package/hyparquet?activeTab=dependencies)
 
 Dependency free since 2023!
 
 ## What is hyparquet?
 
-**Hyparquet** is a lightweight, dependency-free, pure JavaScript library for parsing [Apache Parquet](https://parquet.apache.org) files. Apache Parquet is a popular columnar storage format that is widely used in data engineering, data science, and machine learning applications for efficiently storing and processing large datasets.
+**Hyparquet** is a JavaScript library for parsing [Apache Parquet](https://parquet.apache.org) files in the browser. Apache Parquet is a popular columnar storage format that is widely used in data engineering, data science, and machine learning applications for storing large datasets. Hyparquet is designed to read parquet files efficiently over http, so that parquet files in cloud storage can be queried directly from the browser without needing a server.
 
-Hyparquet aims to be the world's most compliant parquet parser. And it runs in the browser.
+ - Works in browsers and node.js
+ - Pure JavaScript, no dependencies
+ - Supports all parquet types, encodings, and compression codecs
+ - Minimizes data fetching using HTTP range requests
+ - Includes TypeScript definitions
 
 ## Parquet Viewer
 
 **Try hyparquet online**: Drag and drop your parquet file onto [hyperparam.app](https://hyperparam.app) to view it directly in your browser. This service is powered by hyparquet's in-browser capabilities.
 
 [![hyperparam parquet viewer](./hyperparam.png)](https://hyperparam.app/)
-
-## Features
-
-1. **Browser-native**: Built to work seamlessly in the browser, opening up new possibilities for web-based data applications and visualizations.
-2. **Performant**: Designed to efficiently process large datasets by only loading the required data, making it suitable for big data and machine learning applications.
-3. **TypeScript**: Includes TypeScript definitions.
-4. **Dependency-free**: Hyparquet has zero dependencies, making it lightweight and easy to use in any JavaScript project. Only 9.7kb min.gz!
-5. **Highly Compliant:** Supports all parquet encodings, compression codecs, and can open more parquet files than any other library.
-
-## Why hyparquet?
-
-Parquet is widely used in data engineering and data science for its efficient storage and processing of large datasets. What if you could use parquet files directly in the browser, without needing a server or backend infrastructure? That's what hyparquet enables.
-
-Existing JavaScript-based parquet readers (like [parquetjs](https://github.com/ironSource/parquetjs)) are no longer actively maintained, may not support streaming or in-browser processing efficiently, and often rely on dependencies that can inflate your bundle size.
-Hyparquet is actively maintained and designed with modern web usage in mind.
-
-## Demo
-
-Check out a minimal parquet viewer demo that shows how to integrate hyparquet into a react web application using [HighTable](https://github.com/hyparam/hightable).
-
- - **Live Demo**: [https://hyparam.github.io/demos/hyparquet/](https://hyparam.github.io/demos/hyparquet/)
- - **Demo Source Code**: [https://github.com/hyparam/demos/tree/master/hyparquet](https://github.com/hyparam/demos/tree/master/hyparquet)
 
 ## Quick Start
 
@@ -86,8 +68,7 @@ To create parquet files from javascript, check out the [hyparquet-writer](https:
 
 ### Reading Metadata
 
-You can read just the metadata, including schema and data statistics using the `parquetMetadataAsync` function.
-To load parquet metadata in the browser from a remote server:
+You can read just the metadata, including schema and data statistics using the `parquetMetadataAsync` function. This is useful for getting the schema, number of rows, and column names without reading the entire file.
 
 ```javascript
 import { parquetMetadataAsync, parquetSchema } from 'hyparquet'
@@ -102,17 +83,9 @@ const schema = parquetSchema(metadata)
 const columnNames = schema.children.map(e => e.element.name)
 ```
 
-You can also read the metadata synchronously using `parquetMetadata` if you have an array buffer with the parquet footer:
-
-```javascript
-import { parquetMetadata } from 'hyparquet'
-
-const metadata = parquetMetadata(arrayBuffer)
-```
-
 ### AsyncBuffer
 
-Hyparquet requires an argument `file` of type `AsyncBuffer`. An `AsyncBuffer` is similar to a js `ArrayBuffer` but the `slice` method can return async `Promise<ArrayBuffer>`.
+Hyparquet requires an argument `file` of type `AsyncBuffer`. An `AsyncBuffer` is similar to a js `ArrayBuffer` but the `slice` method can return async `Promise<ArrayBuffer>`. This makes it a useful way to represent a remote file.
 
 ```typescript
 type Awaitable<T> = T | Promise<T>
@@ -153,10 +126,6 @@ const data = await parquetReadObjects({ file })
 #### ArrayBuffer
 
 You can provide an `ArrayBuffer` anywhere that an `AsyncBuffer` is expected. This is useful if you already have the entire parquet file in memory.
-
-#### Custom AsyncBuffer
-
-You can implement your own `AsyncBuffer` to create a virtual file that can be read asynchronously by hyparquet.
 
 ### parquetRead vs parquetReadObjects
 
@@ -272,17 +241,23 @@ await parquetRead({
 
 The `parquetReadObjects` function defaults to `rowFormat: 'object'`.
 
-## Supported Parquet Files
+### Binary columns
 
-The parquet format is known to be a sprawling format which includes options for a wide array of compression schemes, encoding types, and data structures.
-Hyparquet supports all parquet encodings: plain, dictionary, rle, bit packed, delta, etc.
+Hyparquet defaults to decoding binary columns as utf8 text strings. A parquet `BYTE_ARRAY` column may contain arbitrary binary data or utf8 encoded text data. In theory, a column should be annotated as [LogicalType](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md) STRING if it contains utf8 text. But in practice, many parquet files omit this annotation. Hyparquet's default decoding behavior can be disabled by setting the `utf8` option to `false`. The `utf8` option only affects `BYTE_ARRAY` columns _without_ an annotation.
 
-**Hyparquet is the most compliant parquet parser on earth** — hyparquet can open more files than pyarrow, rust, and duckdb.
+If Hyparquet detects a [GeoParquet](https://geoparquet.org/) file, any geospatial column will be marked with the GEOMETRY or GEOGRAPHY logical type and decoded to GeoJSON geometries. Set the `geoparquet` option to `false` to disable this behavior.
 
 ## Compression
 
 By default, hyparquet supports uncompressed and snappy-compressed parquet files.
 To support the full range of parquet compression codecs (gzip, brotli, zstd, etc), use the [hyparquet-compressors](https://github.com/hyparam/hyparquet-compressors) package.
+
+```javascript
+import { parquetReadObjects } from 'hyparquet'
+import { compressors } from 'hyparquet-compressors'
+
+const data = await parquetReadObjects({ file, compressors })
+```
 
 | Codec         | hyparquet | with hyparquet-compressors |
 |---------------|-----------|----------------------------|
@@ -294,22 +269,6 @@ To support the full range of parquet compression codecs (gzip, brotli, zstd, etc
 | LZ4           | ❌        | ✅                         |
 | ZSTD          | ❌        | ✅                         |
 | LZ4_RAW       | ❌        | ✅                         |
-
-### hysnappy
-
-For faster snappy decompression, try [hysnappy](https://github.com/hyparam/hysnappy), which uses WASM for a 40% speed boost on large parquet files.
-
-### hyparquet-compressors
-
-You can include support for ALL parquet `compressors` plus hysnappy using the [hyparquet-compressors](https://github.com/hyparam/hyparquet-compressors) package.
-
-
-```javascript
-import { parquetReadObjects } from 'hyparquet'
-import { compressors } from 'hyparquet-compressors'
-
-const data = await parquetReadObjects({ file, compressors })
-```
 
 ## References
 
@@ -325,6 +284,13 @@ const data = await parquetReadObjects({ file, compressors })
  - https://github.com/hyparam/hyparquet-compressors
  - https://github.com/ironSource/parquetjs
  - https://github.com/zhipeng-jia/snappyjs
+
+Sample project that shows how to build a parquet viewer using hyparquet, react, and [HighTable](https://github.com/hyparam/hightable):
+
+ - Hyparquet Demo: [https://hyparam.github.io/demos/hyparquet/](https://hyparam.github.io/demos/hyparquet/)
+ - Hyparquet Demo Source Code: [https://github.com/hyparam/demos/tree/master/hyparquet](https://github.com/hyparam/demos/tree/master/hyparquet)
+
+
 
 ## Contributions
 

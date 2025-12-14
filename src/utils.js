@@ -27,8 +27,8 @@ export function toJson(obj) {
 /**
  * Concatenate two arrays fast.
  *
- * @param {any[]} aaa first array
- * @param {DecodedArray} bbb second array
+ * @param {any[]} aaa
+ * @param {DecodedArray} bbb
  */
 export function concat(aaa, bbb) {
   const chunk = 10000
@@ -38,23 +38,85 @@ export function concat(aaa, bbb) {
 }
 
 /**
- * Deep equality comparison
+ * Deep equality.
  *
- * @param {any} a First object to compare
- * @param {any} b Second object to compare
- * @returns {boolean} true if objects are equal
+ * @param {any} a
+ * @param {any} b
+ * @param {boolean} [strict]
+ * @returns {boolean}
  */
-export function equals(a, b) {
-  if (a === b) return true
-  if (a instanceof Uint8Array && b instanceof Uint8Array) return equals(Array.from(a), Array.from(b))
+export function equals(a, b, strict = true) {
+  // eslint-disable-next-line eqeqeq
+  if (strict ? a === b : a == b) return true
+  if (a instanceof Uint8Array && b instanceof Uint8Array) return equals(Array.from(a), Array.from(b), strict)
   if (!a || !b || typeof a !== typeof b) return false
-  return Array.isArray(a) && Array.isArray(b)
-    ? a.length === b.length && a.every((v, i) => equals(v, b[i]))
-    : typeof a === 'object' && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => equals(a[k], b[k]))
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (!equals(a[i], b[i], strict)) return false
+    }
+    return true
+  }
+  if (typeof a !== 'object') return false
+  const aKeys = Object.keys(a)
+  if (aKeys.length !== Object.keys(b).length) return false
+  for (const k of aKeys) {
+    if (!equals(a[k], b[k], strict)) return false
+  }
+  return true
+}
+
+/**
+ * Get the byte length using fetch with a ranged GET request.
+ * Aborts the request if server returns 200 instead of 206.
+ *
+ * @param {string} url
+ * @param {RequestInit} [requestInit] fetch options
+ * @param {typeof globalThis.fetch} [fetchFn] fetch function to use
+ * @returns {Promise<number>}
+ */
+async function byteLengthFromUrlUsingFetch(url, requestInit = {}, fetchFn = globalThis.fetch) {
+  const controller = new AbortController()
+  const headers = new Headers(requestInit.headers)
+  headers.set('Range', 'bytes=0-0')
+
+  const res = await fetchFn(url, {
+    ...requestInit,
+    headers,
+    signal: controller.signal,
+  })
+
+  if (!res.ok) throw new Error(`fetch with range failed ${res.status}`)
+
+  // Server supports Range requests (206 Partial Content)
+  if (res.status === 206) {
+    const contentRange = res.headers.get('Content-Range')
+    if (!contentRange) throw new Error('missing content-range header')
+
+    // Parse "bytes 0-0/9446073" to get total length
+    const match = contentRange.match(/bytes \d+-\d+\/(\d+)/)
+    if (!match) throw new Error(`invalid content-range header: ${contentRange}`)
+
+    return parseInt(match[1])
+  }
+
+  // Server ignored Range and returned 200 - get Content-Length and abort request
+  if (res.status === 200) {
+    const contentLength = res.headers.get('Content-Length')
+
+    // Abort the request to stop any ongoing download
+    controller.abort()
+
+    if (contentLength) return parseInt(contentLength)
+  }
+
+  throw new Error('server does not support range requests and missing content-length')
 }
 
 /**
  * Get the byte length of a URL using a HEAD request.
+ * If HEAD fails with 403 (e.g., with signed S3 URLs), falls back to a ranged GET request.
+ * If HEAD succeeds but Content-Length is missing, falls back to GET with range.
  * If requestInit is provided, it will be passed to fetch.
  *
  * @param {string} url
@@ -64,13 +126,20 @@ export function equals(a, b) {
  */
 export async function byteLengthFromUrl(url, requestInit, customFetch) {
   const fetch = customFetch ?? globalThis.fetch
-  return await fetch(url, { ...requestInit, method: 'HEAD' })
-    .then(res => {
-      if (!res.ok) throw new Error(`fetch head failed ${res.status}`)
-      const length = res.headers.get('Content-Length')
-      if (!length) throw new Error('missing content length')
-      return parseInt(length)
-    })
+  const res = await fetch(url, { ...requestInit, method: 'HEAD' })
+
+  // If HEAD request is forbidden (common with signed S3 URLs), try GET with range
+  if (res.status === 403) {
+    return byteLengthFromUrlUsingFetch(url, requestInit, fetch)
+  }
+
+  if (!res.ok) throw new Error(`fetch head failed ${res.status}`)
+  const length = res.headers.get('Content-Length')
+  // If Content-Length is missing from HEAD, fallback to GET with range
+  if (!length) {
+    return byteLengthFromUrlUsingFetch(url, requestInit, fetch)
+  }
+  return parseInt(length)
 }
 
 /**
@@ -90,7 +159,7 @@ export async function asyncBufferFromUrl({ url, byteLength, requestInit, fetch: 
   if (!url) throw new Error('missing url')
   const fetch = customFetch ?? globalThis.fetch
   // byte length from HEAD request
-  byteLength ||= await byteLengthFromUrl(url, requestInit, fetch)
+  byteLength ??= await byteLengthFromUrl(url, requestInit, fetch)
 
   /**
    * A promise for the whole buffer, if range requests are not supported.

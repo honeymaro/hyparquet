@@ -1,28 +1,9 @@
-import { parquetRead } from './read.js'
-
+export { readColumnIndex, readOffsetIndex } from './indexes.js'
 export { parquetMetadata, parquetMetadataAsync, parquetSchema } from './metadata.js'
-export { parquetRead }
-export { parquetReadDictionary, parquetReadDictionaryCount } from './read.js'
+export { parquetRead, parquetReadObjects, parquetReadDictionary, parquetReadDictionaryCount } from './read.js'
 export { parquetQuery } from './query.js'
 export { snappyUncompress } from './snappy.js'
 export { asyncBufferFromUrl, byteLengthFromUrl, cachedAsyncBuffer, flatten, toJson } from './utils.js'
-
-/**
- * This is a helper function to read parquet row data as a promise.
- * It is a wrapper around the more configurable parquetRead function.
- *
- * @param {Omit<ParquetReadOptions, 'onComplete'>} options
- * @returns {Promise<Record<string, any>[]>} resolves when all requested rows and columns are parsed
-*/
-export function parquetReadObjects(options) {
-  return new Promise((onComplete, reject) => {
-    parquetRead({
-      rowFormat: 'object',
-      ...options,
-      onComplete,
-    }).catch(reject)
-  })
-}
 
 /**
  * Explicitly export types for use in downstream typescript projects through
@@ -42,7 +23,6 @@ export function parquetReadObjects(options) {
  * @typedef {import('../src/types.d.ts').ConvertedType} ConvertedType
  * @typedef {import('../src/types.d.ts').TimeUnit} TimeUnit
  * @typedef {import('../src/types.d.ts').LogicalType} LogicalType
- * @typedef {import('../src/types.d.ts').LogicalTypeType} LogicalTypeType
  * @typedef {import('../src/types.d.ts').RowGroup} RowGroup
  * @typedef {import('../src/types.d.ts').ColumnChunk} ColumnChunk
  * @typedef {import('../src/types.d.ts').ColumnMetaData} ColumnMetaData
@@ -51,6 +31,8 @@ export function parquetReadObjects(options) {
  * @typedef {import('../src/types.d.ts').Compressors} Compressors
  * @typedef {import('../src/types.d.ts').KeyValue} KeyValue
  * @typedef {import('../src/types.d.ts').Statistics} Statistics
+ * @typedef {import('../src/types.d.ts').GeospatialStatistics} GeospatialStatistics
+ * @typedef {import('../src/types.d.ts').BoundingBox} BoundingBox
  * @typedef {import('../src/types.d.ts').PageType} PageType
  * @typedef {import('../src/types.d.ts').PageHeader} PageHeader
  * @typedef {import('../src/types.d.ts').DataPageHeader} DataPageHeader
@@ -65,4 +47,5 @@ export function parquetReadObjects(options) {
  * @typedef {import('../src/types.d.ts').ParquetDictionaryCountOptions} ParquetDictionaryCountOptions
  * @typedef {import('../src/types.d.ts').MetadataOptions} MetadataOptions
  * @typedef {import('../src/types.d.ts').ParquetParsers} ParquetParsers
+ * @typedef {import('../src/types.d.ts').ParquetQueryFilter} ParquetQueryFilter
  */

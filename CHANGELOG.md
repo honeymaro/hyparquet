@@ -1,5 +1,68 @@
 # Changelog
 
+## [1.23.0]
+ - Replace `columnName: string` with `pathInSchema: string[]` in `onPage` callback (#144)
+
+## [1.22.1]
+ - Fix `BYTE_STREAM_SPLIT` with data page v2 and compression
+
+## [1.22.0]
+ - Rename constants to plural, and remove LogicalTypeType
+
+## [1.21.1]
+ - Add bigint to `ParquetQueryValue` type
+
+## [1.21.0]
+ - Adds optional `filter` parameter for pushdown row group filtering (#141)
+
+## [1.20.3]
+ - Fix extra fetch on the boundary of row groups
+
+## [1.20.2]
+ - Support S3 presigned URLs in `asyncBufferFromUrl` (#137 thanks @EpsilonPrime)
+
+## [1.20.1]
+ - Update geospatial and variant metadata
+
+## [1.20.0]
+ - Mark geospatial columns in GeoParquet with geometry or geography data type (#133)
+ - Add `geoparquet` option to opt out marking GeoParquet columns (#133)
+
+## [1.19.0]
+ - Parse geometry and geography data types to geojson geometry objects (#131)
+
+## [1.18.1]
+ - Fix geospatial metadata parsing
+ - Custom `stringFromBytes` parser option (#129)
+
+## [1.18.0]
+ - Refine `onComplete` types for `rowFormat: 'array'` and `rowFormat: 'object'` (#120)
+ - Only object format for `parquetReadObjects` and `parquetQuery` (#120)
+ - Parquet `__index__` column overrides `parquetQuery` index annotation (#120)
+
+## [1.17.8]
+ - Export `readColumnIndex` and `readOffsetIndex` (#122)
+
+## [1.17.7]
+ - Fix early page termination for non-flat columns (#119)
+ - Fix a bug in parquetQuery, when rowFormat is 'array' (#118 thanks @severo)
+
+## [1.17.6]
+ - Revert "Fix onComplete return type (#104)" (#117)
+
+## [1.17.5]
+ - Fix high-precision decimal parsing (#116)
+
+## [1.17.4]
+ - Fix onComplete return type (#104 thanks @supermar1010)
+
+## [1.17.3]
+ - Fix circular import (#111)
+
+## [1.17.2]
+ - Export `ParquetQueryFilter` type (#105)
+ - Remove a circular dependency (#108)
+
 ## [1.17.1]
  - Fix zero row file (#98 thanks @kroche98)
 
